@@ -1,20 +1,13 @@
-const pdfParse = require('pdf-parse');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const pdfParse = require("pdf-parse");
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+exports.parsePDFAndAnalyze = async (pdfBuffer) => {
+  try {
+    const data = await pdfParse(pdfBuffer);
+    const resumeText = data.text;
 
-exports.parsePDFAndAnalyze = async (fileBuffer) => {
-  const data = await pdfParse(fileBuffer);
-  const resumeText = data.text;
-
-  const model = genAI.getGenerativeModel({ model: 'models/gemini-pro' });
-  const chat = model.startChat({
-    history: [],
-  });
-
-  const prompt = `
-You are an expert resume parser and reviewer.
-Extract the following information in proper JSON format:
+    const prompt = `
+You are an expert technical recruiter and career coach. Analyze the following resume text and extract the information into a valid JSON object with this structure:
 
 {
   "name": "string | null",
@@ -27,9 +20,7 @@ Extract the following information in proper JSON format:
   "education": [{ "degree": "string", "institution": "string", "graduation_year": "string" }],
   "technical_skills": ["string"],
   "soft_skills": ["string"],
-  "projects": ["string"],
-  "certifications": ["string"],
-  "resume_rating": number (1-10),
+  "resume_rating": "number (1-10)",
   "improvement_areas": "string",
   "upskill_suggestions": ["string"]
 }
@@ -37,20 +28,31 @@ Extract the following information in proper JSON format:
 Resume Text:
 """
 ${resumeText}
-"""
-`;
+"""`;
 
-  const result = await chat.sendMessage(prompt);
-  const response = result.response;
-  const responseText = response.text();
+    const response = await fetch("https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key=" + process.env.GOOGLE_API_KEY, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }]
+      }),
+    });
 
-  let structuredJSON = {};
-  try {
-    structuredJSON = JSON.parse(responseText);
+    const result = await response.json();
+    console.log("🧠 Gemini raw response:\n", JSON.stringify(result, null, 2));
+
+    if (!result?.candidates || !result.candidates[0]?.content?.parts?.[0]?.text) {
+      throw new Error("No valid response from Gemini.");
+    }
+
+    const responseText = result.candidates[0].content.parts[0].text;
+    const cleaned = responseText.replace(/```json|```/g, "").trim();
+
+    return JSON.parse(cleaned);
   } catch (err) {
-    console.error('Failed to parse Gemini response:', err.message);
-    throw new Error('LLM response format invalid');
+    console.error("Gemini fetch failed:", err);
+    throw new Error("Gemini analysis failed.");
   }
-
-  return structuredJSON;
 };
